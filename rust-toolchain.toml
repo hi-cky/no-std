@@ -1,0 +1,3 @@
+[toolchain]
+channel = "nightly"  # 指定具体版本，或直接写 "nightly"
+targets = ["riscv64gc-unknown-none-elf"]
