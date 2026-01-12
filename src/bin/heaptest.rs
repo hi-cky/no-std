@@ -8,9 +8,10 @@
 #![no_std]
 #![no_main]
 
+use no_std::logging;
 use no_std::println;
 use no_std::system;
-use no_std::heap_allocator;
+use no_std::heap;
 
 extern crate alloc;
 
@@ -19,11 +20,12 @@ extern crate alloc;
 /// 初始化系统并运行堆内存测试
 #[unsafe(no_mangle)]
 pub fn main() -> ! {
-    system::clear_bss();
+    logging::init();
+    // system::clear_bss();
     system::print_memory_layout();
 
     // 初始化堆
-    heap_allocator::init_heap();
+    heap::init_heap();
 
     heap_test();
 

@@ -1,0 +1,6 @@
+[check]
+# Use clippy so diagnostics match what clippy would report.
+command = "clippy"
+# Only check library code; tests/benches need the unavailable `test` crate.
+allTargets = false
+extraArgs = ["--target", "riscv64gc-unknown-none-elf", "--lib"]

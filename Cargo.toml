@@ -8,4 +8,6 @@ opt-level = 0  # 完全禁用优化
 
 [dependencies]
 buddy_system_allocator = "0.6"
-
+lazy_static = { version = "1.5", default-features = false, features = ["spin_no_std"] }
+spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex"] }
+log = "*"

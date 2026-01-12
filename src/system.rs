@@ -2,7 +2,7 @@
 //! 
 //! 提供系统级功能，包括关机、重启、内存布局打印和 BSS 段清理。
 
-use crate::println;
+use log::info;
 
 /// 🖥️ RISC-V 系统关机函数
 /// 
@@ -31,9 +31,6 @@ pub fn shutdown() -> ! {
 }
 
 
-/// 🚀 系统重启函数
-/// 
-/// 通过向 Power Management 寄存器写入重启命令来实现系统重启
 /// 🚀 系统重启函数
 /// 
 /// 通过向 Power Management 寄存器写入重启命令来实现系统重启
@@ -69,32 +66,32 @@ pub fn print_memory_layout() {
         static __STACK_END: u8;
         static __STACK_TOP: u8;
     }
-    println!("📋 内存段布局信息:");
-    println!("==================");
+    info!("📋 内存段布局信息:");
+    info!("==================");
     
     unsafe {
         // 打印各段信息
-        println!("🔧 .text 段:");
-        println!("   开始地址: 0x{:08x}", &__TEXT_START as *const u8 as usize);
-        println!("   结束地址: 0x{:08x}", &__TEXT_END as *const u8 as usize);
+        info!("🔧 .text 段:");
+        info!("   开始地址: 0x{:08x}", &__TEXT_START as *const u8 as usize);
+        info!("   结束地址: 0x{:08x}", &__TEXT_END as *const u8 as usize);
         
-        println!("📖 .rodata 段:");
-        println!("   开始地址: 0x{:08x}", &__RODATA_START as *const u8 as usize);
-        println!("   结束地址: 0x{:08x}", &__RODATA_END as *const u8 as usize);
+        info!("📖 .rodata 段:");
+        info!("   开始地址: 0x{:08x}", &__RODATA_START as *const u8 as usize);
+        info!("   结束地址: 0x{:08x}", &__RODATA_END as *const u8 as usize);
         
-        println!("💾 .data 段:");
-        println!("   开始地址: 0x{:08x}", &__DATA_START as *const u8 as usize);
-        println!("   结束地址: 0x{:08x}", &__DATA_END as *const u8 as usize);
+        info!("💾 .data 段:");
+        info!("   开始地址: 0x{:08x}", &__DATA_START as *const u8 as usize);
+        info!("   结束地址: 0x{:08x}", &__DATA_END as *const u8 as usize);
         
-        println!("🗑️ .bss 段:");
-        println!("   开始地址: 0x{:08x}", &__BSS_START as *const u8 as usize);
-        println!("   结束地址: 0x{:08x}", &__BSS_END as *const u8 as usize);
+        info!("🗑️ .bss 段:");
+        info!("   开始地址: 0x{:08x}", &__BSS_START as *const u8 as usize);
+        info!("   结束地址: 0x{:08x}", &__BSS_END as *const u8 as usize);
         
-        println!("📚 .stack 段:");
-        println!("   开始地址: 0x{:08x}", &__STACK_START as *const u8 as usize);
-        println!("   结束地址: 0x{:08x}", &__STACK_END as *const u8 as usize);
-        println!("   栈顶地址: 0x{:08x}", &__STACK_TOP as *const u8 as usize);
-        println!("==================");
+        info!("📚 .stack 段:");
+        info!("   开始地址: 0x{:08x}", &__STACK_START as *const u8 as usize);
+        info!("   结束地址: 0x{:08x}", &__STACK_END as *const u8 as usize);
+        info!("   栈顶地址: 0x{:08x}", &__STACK_TOP as *const u8 as usize);
+        info!("==================");
     }
 }
 
@@ -119,10 +116,10 @@ pub fn clear_bss() {
         // 计算 BSS 段大小
         let bss_size = bss_end - bss_start;
         
-        println!("🧹 清空 BSS 段:");
-        println!("   开始地址: 0x{:08x}", bss_start);
-        println!("   结束地址: 0x{:08x}", bss_end);
-        println!("   段大小: {} 字节", bss_size);
+        info!("🧹 清空 BSS 段:");
+        info!("   开始地址: 0x{:08x}", bss_start);
+        info!("   结束地址: 0x{:08x}", bss_end);
+        info!("   段大小: {} 字节", bss_size);
         
         // 将 BSS 段的所有字节设置为 0
         let bss_start_ptr = bss_start as *mut u8;
@@ -130,7 +127,7 @@ pub fn clear_bss() {
             *bss_start_ptr.add(i) = 0;
         }
         
-        println!("✅ BSS 段清空完成");
+        info!("✅ BSS 段清空完成");
     }
 }
 
