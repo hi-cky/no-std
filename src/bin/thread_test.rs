@@ -15,6 +15,8 @@ use no_std::format;
 use no_std::println;
 use no_std::system;
 use no_std::thread;
+use no_std::thread::sleep;
+use no_std::timer;
 
 #[unsafe(no_mangle)]
 pub fn main() -> ! {
@@ -48,8 +50,8 @@ fn main_thread() {
 
 fn task(thread_name: &str, times: u32) {
     for i in 1..=times {
-        println!("我是 {}, result: {}", thread_name, fib(i));
-        thread::yield_now();
+        println!("我是 {}, result: {}, time: {}", thread_name, fib(i), timer::get_time());
+        sleep(1000);
     }
 }
 

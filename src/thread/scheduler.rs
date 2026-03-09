@@ -136,33 +136,30 @@ impl Scheduler {
     /// 找到第一个就绪线程的 id（优先找其他线程）（只读遍历，避免把整个 `&mut self` 借用住）
     fn find_ready_thread_id(&self) -> Option<usize> {
         // 需求：优先挑选“非当前线程”的 Ready；若没有，再考虑当前线程是否 Ready
-        let current_id = self.current;
+        let current_id = if self.current.is_some() {
+            self.current.unwrap()
+        } else {
+            0
+        };
+        
+        let num = self.threads.len();
 
-        // 1) 先找其它就绪线程
-        let other_ready = self.threads.iter().enumerate().find_map(|(id, slot)| {
-            slot.as_ref().and_then(|t| {
-                if t.state == ThreadState::Ready && Some(t.id) != current_id {
-                    Some(id)
-                } else {
-                    None
+        let mut curr = (current_id + 1) % num;
+        loop {
+            let Some(slot) = &self.threads[curr] else {
+                curr = (curr + 1) % num;
+                if curr == current_id {
+                    return None;
                 }
-            })
-        });
-        if other_ready.is_some() {
-            return other_ready;
-        }
-
-        // 2) 找不到其它就绪线程：如果当前线程仍是 Ready，就返回当前线程
-        match current_id {
-            Some(id)
-                if self
-                    .find_thread(id)
-                    .map(|t| t.state == ThreadState::Ready)
-                    .unwrap_or(false) =>
-            {
-                Some(id)
+                continue;
+            };
+            if slot.state == ThreadState::Ready {
+                return Some(curr);
             }
-            _ => None,
+            curr = (curr + 1) % num;
+            if curr == current_id {
+                return None;
+            }
         }
     }
 

@@ -31,3 +31,5 @@ pub mod heap;
 pub mod logging;
 pub mod system;
 pub mod thread;
+pub mod timer;
+pub mod trap;

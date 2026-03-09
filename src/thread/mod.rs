@@ -2,7 +2,9 @@ pub mod scheduler;
 pub mod tcb;
 
 extern crate alloc;
+use crate::timer;
 use alloc::boxed::Box;
+use log::warn;
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
 
@@ -16,6 +18,8 @@ unsafe impl Sync for GlobalScheduler {}
 static SCHEDULER: GlobalScheduler = GlobalScheduler(UnsafeCell::new(None));
 
 pub static STACK_SIZE: usize = 1024;
+
+pub static INTERVAL: usize = 10; // 自动切换间隔时间（ms）
 
 fn sched() -> &'static mut Scheduler {
     unsafe {
@@ -44,6 +48,13 @@ pub fn new_thread(job: impl FnOnce() + Send + 'static) -> ThreadHandle {
 }
 
 pub fn init(main_thread: impl FnOnce() + Send + 'static) {
+    // 初始化计数器，为了实现抢占式调度
+    timer::init(|| {
+        timer::set_next_trigger(timer::get_time() + timer::CLOCK_FREQ * INTERVAL / 1000);
+        // yield_now();
+    });
+    timer::set_next_trigger(timer::get_time() + timer::CLOCK_FREQ * INTERVAL / 1000);
+
     let h = new_thread(main_thread);
     h.start();
     sched().run_next();
@@ -79,13 +90,24 @@ pub(crate) extern "C" fn thread_entry() {
 
 pub fn yield_now() {
     // 获取当前线程id
+    if let Some(current_id) = sched().current {
+        // 标记当前线程为就绪状态
+        sched().yield_thread(current_id);
+
+        // 切换到下一个就绪线程（通常不会返回）
+        sched().run_next();
+    }
+}
+
+pub fn sleep(ms: usize) {
     let current_id = sched().current.expect("current thread not set");
-
-    // 标记当前线程为就绪状态
-    sched().yield_thread(current_id);
-
-    // 切换到下一个就绪线程（通常不会返回）
-    sched().run_next();
+    
+    let end_time = timer::get_time() + timer::CLOCK_FREQ * ms / 1000;
+    
+    warn!("Thread{} is going to be sleep {} ms", current_id, ms);
+    while timer::get_time() < end_time {
+        yield_now();
+    }
 }
 
 /// 等待指定线程结束（协作式 join）
