@@ -1,104 +1,64 @@
-//! ⏱️ 计时器模块
-//!
-//! 提供 RISC-V 机器定时器（CLINT/mtime）相关的基础接口。
-//! 目前基于 QEMU virt 的内存映射地址实现。
+//! QEMU virt 单核环境下的时间读取和周期定时中断。
 
-use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::trap;
 
-/// 系统时钟频率（Hz）
-///
-/// 说明：
-/// - QEMU virt 默认 timebase 频率通常为 10MHz
-/// - 如果平台频率不同，请在这里调整
+/// 每秒的 tick 数；10_000 tick 对应 1 毫秒。
 pub const CLOCK_FREQ: usize = 10_000_000;
 
-// QEMU virt 平台 CLINT 基地址（mtime/mtimecmp）
-const CLINT_BASE: usize = 0x0200_0000;
-// mtime 寄存器地址（64-bit）
-const MTIME: usize = CLINT_BASE + 0xBFF8;
-// mtimecmp 寄存器基地址（64-bit），每个 hart 占用 8 字节
-const MTIMECMP_BASE: usize = CLINT_BASE + 0x4000;
+// 当前时间寄存器，以及第一个 CPU 的定时中断触发时间寄存器。
+const MTIME: usize = 0x0200_BFF8;
+const MTIMECMP: usize = 0x0200_4000;
 
-/// 保存计时器中断处理函数指针（0 表示未设置）
-static TIMER_INTERRUPT_HANDLER: AtomicUsize = AtomicUsize::new(0);
+// 保存间隔和回调。仅用于单核：修改时关闭中断，处理时也不会嵌套中断。
+static mut INTERVAL_TICKS: usize = 0;
+static mut HANDLER: fn() = || {};
 
-pub fn init(handler: fn()) {
-    // 先注册处理函数并设置一个“安全”的初始触发时间，
-    // 避免开启中断时 mtimecmp 仍为 0 导致立即进入中断并无法恢复。
-    set_timer_interrupt_handler(handler);
-    set_next_trigger(get_time().wrapping_add(1));
+/// 设置间隔（毫秒）和回调，并立即启动周期定时中断。
+///
+/// 回调应短小，不要阻塞、切换线程、使用浮点运算或再次初始化定时器。
+/// 当前中断入口只保存整数寄存器，且本模块仅支持单核运行。
+pub fn init(interval_ms: usize, handler: fn()) {
+    assert!(interval_ms > 0, "timer interval must be positive");
+    let ticks = interval_ms
+        .checked_mul(CLOCK_FREQ / 1000)
+        .expect("timer interval too large");
+
+    // 先关中断，避免旧的定时中断在配置更新到一半时触发。
+    trap::disable_interrupts();
+    unsafe {
+        // 单核且已关闭中断，这里不会与中断处理同时访问这两个变量。
+        INTERVAL_TICKS = ticks;
+        HANDLER = handler;
+    }
+    set_trigger(get_time() + ticks);
+    // 触发时间和回调都准备好后，再设置入口并打开中断开关。
     trap::init();
 }
 
-/// 设置计时器中断处理函数
-///
-/// 说明：
-/// - 这里只保存函数指针，不负责开启/关闭中断
-/// - 中断处理函数必须是 `fn()` 类型（不捕获环境）
-pub fn set_timer_interrupt_handler(handler: fn()) {
-    // 使用原子写入避免并发场景下出现部分写入
-    TIMER_INTERRUPT_HANDLER.store(handler as usize, Ordering::Release);
+/// 由 trap 调用：设置下一次触发时间，再执行保存的回调。
+pub(crate) fn on_interrupt() {
+    let now = get_time();
+    // 硬件撤销中断请求可能有延迟；尚未到新期限时忽略重复通知。
+    if now < unsafe { read_volatile(MTIMECMP as *const u64) as usize } {
+        return;
+    }
+    // 中断进入时 CPU 自动关闭全局中断；单核环境下可直接读取配置。
+    let (interval, handler) = unsafe { (INTERVAL_TICKS, HANDLER) };
+    set_trigger(now + interval);
+    handler();
 }
 
-/// 获取系统时间（返回计数器数值）
-///
-/// 说明：
-/// - 返回值单位是 timebase tick
-/// - 对应 RISC-V `mtime` 寄存器的当前值
+/// 返回当前时间，单位为 tick，不是毫秒。
 pub fn get_time() -> usize {
-    // 读取 64-bit mtime
-    let ticks = read_mtime();
-    ticks as usize
+    // QEMU virt 的 RV64 环境下，此地址是对齐的 64 位硬件寄存器。
+    // volatile 保证每次实际读取寄存器，不被编译器当成普通内存读取优化掉。
+    unsafe { read_volatile(MTIME as *const u64) as usize }
 }
 
-/// 设置下一次计时器中断触发时间（绝对 tick）
-///
-/// 说明：
-/// - 传入的是绝对时间点（timebase tick），不是相对增量
-/// - 常见用法：`set_next_trigger(get_time() + delta)`
-pub fn set_next_trigger(time: usize) {
-    let now = read_mtime();
-    // 确保写入时间点在未来，避免 mtimecmp <= mtime 导致中断一直 pending
-    let mut next = time as u64;
-    if next <= now {
-        next = now.wrapping_add(1);
-    }
-    // 写入 64-bit mtimecmp（按 hart 选择对应 compare 寄存器）
-    unsafe { write_volatile(mtimecmp_addr() as *mut u64, next) };
-}
-
-/// 从已注册的中断处理函数中调用（可选的内部工具）
-///
-/// 说明：
-/// - 该函数未对外暴露；具体的 trap/中断入口可在需要时调用
-#[allow(dead_code)]
-pub(crate) fn call_timer_interrupt_handler() {
-    let handler = TIMER_INTERRUPT_HANDLER.load(Ordering::Acquire);
-    if handler != 0 {
-        let handler = unsafe { core::mem::transmute::<usize, fn()>(handler) };
-        handler();
-    }
-}
-
-/// 读取 mtime（64-bit）
-fn read_mtime() -> u64 {
-    unsafe { read_volatile(MTIME as *const u64) }
-}
-
-/// 读取当前 hart id
-fn read_mhartid() -> usize {
-    let hart_id: usize;
-    unsafe {
-        asm!("csrr {0}, mhartid", out(reg) hart_id);
-    }
-    hart_id
-}
-
-/// 获取当前 hart 对应的 mtimecmp 地址
-fn mtimecmp_addr() -> usize {
-    MTIMECMP_BASE + read_mhartid() * core::mem::size_of::<u64>()
+/// 写入绝对触发时间；当前时间达到此值时，硬件请求定时中断。
+fn set_trigger(time: usize) {
+    // 此地址为 QEMU virt 第一个 CPU 的 64 位定时比较寄存器。
+    unsafe { write_volatile(MTIMECMP as *mut u64, time as u64) };
 }

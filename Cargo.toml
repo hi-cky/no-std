@@ -3,6 +3,42 @@ name = "no-std"
 version = "0.1.0"
 edition = "2024"
 
+# 裸机示例通过 QEMU 验证，不使用依赖标准库的默认测试框架。
+[lib]
+test = false
+bench = false
+doctest = false
+
+[[bin]]
+name = "helloworld"
+path = "src/bin/helloworld.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "heaptest"
+path = "src/bin/heaptest.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "linked_list"
+path = "src/bin/linked_list.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "thread_test"
+path = "src/bin/thread_test.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "timer_test"
+path = "src/bin/timer_test.rs"
+test = false
+bench = false
+
 [profile.release]
 opt-level = 0  # 完全禁用优化
 

@@ -1,62 +1,55 @@
 //! 🧷 Trap/中断处理模块
 //!
 //! 提供 RISC-V 机器模式 trap 入口与基本分发逻辑。
-//! 目前只处理机器定时器中断，其它异常直接记录并自旋。
+//! 定时中断交给 timer 处理，其他异常或中断记录后停机。
 
 use core::arch::{asm, global_asm};
-use log::{error, info, warn};
+use log::error;
 
 use crate::timer;
 
 // 引入汇编 trap 入口
 global_asm!(include_str!("trap.S"));
 
-/// 机器定时器中断的 cause 值（RV64）
-const MCAUSE_MACHINE_TIMER: usize = 0x8000_0000_0000_0007;
-
-/// 初始化 trap：设置 mtvec 并开启机器模式定时器中断
+/// 设置异常入口，并开启定时中断和全局中断。
 ///
-/// 说明：
-/// - 使用 direct 模式（mtvec 低 2 位为 0）
-/// - 这里只打开 MIE.MTIE 和 mstatus.MIE
+/// 由 timer::init 在回调和触发时间配置完成后调用。
 pub fn init() {
+    disable_interrupts();
+    set_mtvec(__trap_entry as *const () as usize);
+    // 机器模式下访问中断控制寄存器：先开分类开关，最后开全局开关。
     unsafe {
-        // 设置 trap 向量入口
-        set_mtvec(__trap_entry as usize);
-
-        // 开启机器模式定时器中断（mie.MTIE）
-        let mut mie: usize;
-        asm!("csrr {0}, mie", out(reg) mie);
-        mie |= 1 << 7; // MTIE
-        asm!("csrw mie, {0}", in(reg) mie);
-
-        // 全局中断使能（mstatus.MIE）
-        let mut mstatus: usize;
-        asm!("csrr {0}, mstatus", out(reg) mstatus);
-        mstatus |= 1 << 3; // MIE
-        asm!("csrw mstatus, {0}", in(reg) mstatus);
+        // mie.MTIE（第 7 位）：允许定时器中断。
+        asm!("csrs mie, {}", in(reg) 1usize << 7);
+        // mstatus.MIE（第 3 位）：允许接收机器模式中断。
+        asm!("csrsi mstatus, 8");
     }
+}
+
+/// 暂时关闭全局中断，供定时器在更新配置前调用。
+pub(crate) fn disable_interrupts() {
+    // 运行于机器模式，清除 mstatus.MIE；不改变各类中断的独立开关。
+    unsafe { asm!("csrci mstatus, 8") };
 }
 
 /// Rust 侧 trap 处理函数（由汇编入口调用）
 ///
 /// 说明：
 /// - 读取 mcause 判断中断类型
-/// - 目前仅处理机器定时器中断
+/// - 定时中断处理后返回，其余情况记录诊断信息后停机
 #[unsafe(no_mangle)]
 pub extern "C" fn trap_handler() {
     let cause = read_csr("mcause");
-    let tval = read_csr("mtval");
-    let epc = read_csr("mepc");
-
-    if cause == MCAUSE_MACHINE_TIMER {
-        // 调用已注册的计时器中断处理函数（如果存在）
-        // warn!("[INTERTUPT] Timer interrupt occurred");
-        timer::call_timer_interrupt_handler();
+    // RV64 最高位为 1 表示中断，原因编号 7 为机器定时器中断。
+    if cause == (1usize << 63) | 7 {
+        timer::on_interrupt();
         return;
     }
 
-    // 其它异常/中断：记录并停机（避免无穷异常）
+    let tval = read_csr("mtval");
+    let epc = read_csr("mepc");
+
+    // 记录异常或中断并停机，避免返回后反复触发。
     error!(
         "Unhandled trap: mcause=0x{:x}, mtval=0x{:x}, mepc=0x{:x}",
         cause, tval, epc

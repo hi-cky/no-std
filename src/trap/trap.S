@@ -5,6 +5,8 @@
     .section .text.trap
     .globl __trap_entry
     .type __trap_entry, @function
+    # mtvec 的最低两位用于模式编码，入口地址必须按 4 字节对齐。
+    .balign 4
 __trap_entry:
     # 保存调用者保存寄存器（简化：保存 ra 和 t0-t6, a0-a7）
     addi sp, sp, -(1 + 7 + 8)*8

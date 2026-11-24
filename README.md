@@ -20,13 +20,15 @@ src/
 ## 📦 核心模块
 
 ### 🖥️ 控制台模块 (`console.rs`)
+
 - **功能**: 基于 QEMU virt 平台的 UART 串口输出
-- **特性**: 
+- **特性**:
   - 支持格式化打印 (`print!`, `println!`)
   - 直接寄存器操作，无依赖
   - 自动换行处理
 
 ### 🚨 错误处理模块 (`error.rs`)
+
 - **功能**: 统一的错误处理和 panic 处理
 - **特性**:
   - 全局 panic 处理器
@@ -34,6 +36,7 @@ src/
   - 系统安全关闭
 
 ### 🖥️ 系统功能模块 (`system.rs`)
+
 - **功能**: 系统级功能
 - **特性**:
   - 系统关机/重启
@@ -42,6 +45,7 @@ src/
   - 内存段地址管理
 
 ### 🌱 堆内存分配器 (`heap_allocator.rs`)
+
 - **功能**: 基于 buddy_system_allocator 的堆管理
 - **特性**:
   - 1MB 堆内存空间
@@ -51,16 +55,19 @@ src/
 ## 🚀 快速开始
 
 ### 环境要求
+
 - Rust 工具链
 - QEMU (qemu-system-riscv64)
 - RISC-V 目标: `riscv64gc-unknown-none-elf`
 
 ### 安装目标
+
 ```bash
 rustup target add riscv64gc-unknown-none-elf
 ```
 
 ### 编译项目
+
 ```bash
 # 编译所有应用
 make build
@@ -70,6 +77,7 @@ make build APP=helloworld
 ```
 
 ### 运行应用
+
 ```bash
 # 运行默认应用 (helloworld)
 make run
@@ -83,6 +91,7 @@ make debug APP=helloworld
 ```
 
 ### 查看可用应用
+
 ```bash
 make list-apps
 ```
@@ -90,11 +99,13 @@ make list-apps
 ## 📋 应用程序
 
 ### 🌍 Hello World (`helloworld`)
+
 - **功能**: 基础示例应用
 - **演示**: 串口输出和系统关机
 - **运行**: `make run APP=helloworld`
 
 ### 🧪 堆内存测试 (`heaptest`)
+
 - **功能**: 堆内存分配器测试
 - **演示**: Box 和 Vec 动态分配
 - **运行**: `make run APP=heaptest`
@@ -120,12 +131,14 @@ make list-apps
 ## 🔧 构建配置
 
 ### 目标平台
+
 - **架构**: RISC-V 64-bit (RV64GC)
 - **机器**: QEMU virt
 - **内存**: 128MB RAM
 - **启动**: 无 bootloader，直接加载
 
 ### 依赖
+
 ```toml
 [dependencies]
 buddy_system_allocator = "0.6"
@@ -134,11 +147,13 @@ buddy_system_allocator = "0.6"
 ## 🎯 输出示例
 
 ### Hello World 应用输出
+
 ```
 Hello, World!
 ```
 
 ### 堆内存测试输出
+
 ```
 🧹 清空 BSS 段:
    开始地址: 0x80007000
@@ -170,6 +185,7 @@ heap_test passed!
 ## 🔍 调试
 
 ### GDB 调试
+
 ```bash
 # 启动调试模式
 make debug APP=helloworld
@@ -179,6 +195,7 @@ make gdb
 ```
 
 ### 查看 ELF 信息
+
 ```bash
 # 查看段信息
 rust-readobj --sections target/riscv64gc-unknown-none-elf/release/helloworld
@@ -190,17 +207,34 @@ rust-objdump -t target/riscv64gc-unknown-none-elf/release/helloworld
 ## 📝 开发指南
 
 ### 添加新应用
+
 1. 在 `src/bin/` 目录下创建新的 `.rs` 文件
 2. 实现 `main()` 函数
 3. 使用 `make run APP=your_app` 运行
 
 ### 添加新模块
+
 1. 在 `src/` 目录下创建新的 `.rs` 文件
 2. 在 `src/lib.rs` 中声明模块
 3. 在应用程序中导入使用
 
 ### 修改内存布局
+
 编辑 `memory.x` 文件调整段大小和地址。
+
+## 🐛 已知问题与待办
+
+### [TODO] 线程 ID 复用导致旧句柄指向新线程
+
+当前调度器使用线程表的槽位索引作为线程 ID，线程退出后会清空槽位，后续新线程可以复用该 ID。线程句柄和 `waiting_for` 仅记录 ID，无法区分同一槽位先后创建的不同线程，存在身份混淆（ABA）问题。
+
+例如：保留线程 A（ID 为 2）的句柄 → A 退出 → 线程 B 复用 ID 2 → 用 A 的旧句柄调用 `join`，实际会等待 B。
+
+当前协作式流程中，已经阻塞等待 A 的线程会在 A 退出时被立即唤醒并清除等待关系；这里的问题是槽位复用后再使用旧句柄。其他通过旧句柄按 ID 操作线程的接口也存在相同风险。
+
+后续可引入“槽位索引 + 代数（generation）”作为完整线程身份：槽位复用时递增代数，槽位清空后仍保留代数；线程句柄、等待关系以及查找和唤醒逻辑均校验完整身份。也可先采用不复用 ID 的简化方案。此问题暂缓修复。
+
+相关代码：[调度器](src/thread/scheduler.rs)、[线程句柄](src/thread/mod.rs)、[线程控制块](src/thread/tcb.rs)。
 
 ## 🤝 贡献
 
@@ -212,7 +246,7 @@ rust-objdump -t target/riscv64gc-unknown-none-elf/release/helloworld
 
 ---
 
-**作者**: [hi-cky](https://github.com/hi-cky)  
-**项目**: RISC-V 裸机操作系统  
-**语言**: Rust  
-**架构**: RISC-V 64-bit 
+**作者**: [hi-cky](https://github.com/hi-cky)
+**项目**: RISC-V 裸机操作系统
+**语言**: Rust
+**架构**: RISC-V 64-bit

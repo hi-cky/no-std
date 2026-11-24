@@ -67,7 +67,7 @@ impl TCB {
         let sp_top = tcb.stack.as_ptr() as usize + STACK_SIZE * mem::size_of::<usize>();
         let sp_top_aligned = sp_top & !0xF;
         tcb.context = ThreadContext {
-            ra: thread_entry as usize,
+            ra: thread_entry as *const () as usize,
             sp: sp_top_aligned,
             s: [0; 12],
         };

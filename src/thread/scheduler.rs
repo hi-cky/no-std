@@ -26,6 +26,7 @@ impl Scheduler {
     /// 添加一个线程，返回线程 id
     pub fn add_thread(&mut self, job: Box<dyn FnOnce() + Send + 'static>) -> usize {
         // 线程 id 使用“空槽位优先”的策略，避免 id 无限增长
+        // [TODO] 槽位复用会使旧句柄误指向新线程（ABA）；引入索引 + 代数，详见 README 已知问题。
         let id = self
             .threads
             .iter()
@@ -48,6 +49,7 @@ impl Scheduler {
     }
 
     pub fn block_thread(&mut self, current_id: usize, target_id: usize) {
+        // [TODO] 仅按 ID 查找无法识别已复用的槽位；句柄和 waiting_for 应保存并校验完整线程身份。
         // 只有当目标线程存在且没有结束时才阻塞
         if let Some(target) = self.find_thread(target_id) {
             if target.state == ThreadState::Terminated {
@@ -59,6 +61,8 @@ impl Scheduler {
         if let Some(current) = self.get_thread(current_id) {
             current.state = ThreadState::Blocked;
             current.waiting_for = Some(target_id);
+            info!("Thread {} blocked, waiting for thread {}", current_id, target_id);
+            info!("ThreadState {:?}", current.state);
         }
     }
 
@@ -82,6 +86,7 @@ impl Scheduler {
         }
 
         // 唤醒等待指定线程结束的所有线程
+        // [TODO] 引入代数后，按完整线程身份匹配 waiting_for，保持等待与唤醒使用同一身份规则。
         for slot in self.threads.iter_mut() {
             if let Some(t) = slot.as_mut() {
                 if t.state == ThreadState::Blocked && t.waiting_for == Some(thread_id) {
@@ -133,34 +138,27 @@ impl Scheduler {
         }
     }
 
-    /// 找到第一个就绪线程的 id（优先找其他线程）（只读遍历，避免把整个 `&mut self` 借用住）
+    /// 从当前线程的下一槽位开始查找，最后检查当前线程；
+    /// 没有当前线程时，从 0 号槽位开始。
     fn find_ready_thread_id(&self) -> Option<usize> {
-        // 需求：优先挑选“非当前线程”的 Ready；若没有，再考虑当前线程是否 Ready
-        let current_id = if self.current.is_some() {
-            self.current.unwrap()
-        } else {
-            0
-        };
-        
-        let num = self.threads.len();
+        let len = self.threads.len();
+        if len == 0 {
+            return None;
+        }
 
-        let mut curr = (current_id + 1) % num;
-        loop {
-            let Some(slot) = &self.threads[curr] else {
-                curr = (curr + 1) % num;
-                if curr == current_id {
-                    return None;
+        let start = self.current.map_or(0, |id| (id + 1) % len);
+
+        // 最多检查一圈，跳过空槽位和非就绪线程。
+        for offset in 0..len {
+            let id = (start + offset) % len;
+            if let Some(thread) = &self.threads[id] {
+                if thread.state == ThreadState::Ready {
+                    return Some(id);
                 }
-                continue;
-            };
-            if slot.state == ThreadState::Ready {
-                return Some(curr);
-            }
-            curr = (curr + 1) % num;
-            if curr == current_id {
-                return None;
             }
         }
+
+        None
     }
 
     pub(crate) fn get_thread(&mut self, thread_id: usize) -> Option<&mut TCB> {

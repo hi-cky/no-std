@@ -4,7 +4,6 @@ pub mod tcb;
 extern crate alloc;
 use crate::timer;
 use alloc::boxed::Box;
-use log::warn;
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
 
@@ -18,8 +17,6 @@ unsafe impl Sync for GlobalScheduler {}
 static SCHEDULER: GlobalScheduler = GlobalScheduler(UnsafeCell::new(None));
 
 pub static STACK_SIZE: usize = 1024;
-
-pub static INTERVAL: usize = 10; // 自动切换间隔时间（ms）
 
 fn sched() -> &'static mut Scheduler {
     unsafe {
@@ -48,12 +45,8 @@ pub fn new_thread(job: impl FnOnce() + Send + 'static) -> ThreadHandle {
 }
 
 pub fn init(main_thread: impl FnOnce() + Send + 'static) {
-    // 初始化计数器，为了实现抢占式调度
-    timer::init(|| {
-        timer::set_next_trigger(timer::get_time() + timer::CLOCK_FREQ * INTERVAL / 1000);
-        // yield_now();
-    });
-    timer::set_next_trigger(timer::get_time() + timer::CLOCK_FREQ * INTERVAL / 1000);
+    // [TODO] 可选操作，启用每隔一段时间触发线程切换的定时器实现抢占式调度
+    timer::init(10, || {yield_now()});
 
     let h = new_thread(main_thread);
     h.start();
@@ -99,12 +92,19 @@ pub fn yield_now() {
     }
 }
 
-pub fn sleep(ms: usize) {
-    let current_id = sched().current.expect("current thread not set");
-    
+/// 原地等待指定毫秒，期间不主动切换线程。
+pub fn delay(ms: usize) {
+    let start = timer::get_time();
+    let ticks = ms * (timer::CLOCK_FREQ / 1000);
+
+    while timer::get_time().wrapping_sub(start) < ticks {
+        core::hint::spin_loop();
+    }
+}
+
+pub fn sleep(ms: usize) {    
     let end_time = timer::get_time() + timer::CLOCK_FREQ * ms / 1000;
     
-    warn!("Thread{} is going to be sleep {} ms", current_id, ms);
     while timer::get_time() < end_time {
         yield_now();
     }
