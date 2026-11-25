@@ -57,7 +57,7 @@ fn main_thread() {
 fn task(thread_name: &str, times: usize) {
     for i in 1..=times {
         println!("我是 {}, result: {}, time: {}", thread_name, fib(i), timer::get_time());
-        // sleep(100 * i);
+        sleep(100 * i);
         // delay(50);
     }
 }

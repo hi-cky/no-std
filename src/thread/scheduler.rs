@@ -1,5 +1,5 @@
 extern crate alloc;
-use super::tcb::{TCB, ThreadContext, ThreadState};
+use super::tcb::{TCB, ThreadState};
 use crate::system;
 use alloc::{boxed::Box, vec::Vec};
 use log::{info, warn};
@@ -9,17 +9,17 @@ pub struct Scheduler {
     pub current: Option<usize>,
     /// 线程表：索引即线程 id，空槽位用 None 表示（便于复用）
     threads: Vec<Option<TCB>>,
-    /// 当没有当前线程时的“占位上下文”，避免引用临时值
-    idle_context: ThreadContext,
+    /// 首次调度时保存启动栈的 sp。
+    idle_sp: usize,
 }
 
 impl Scheduler {
-    // Methods for the Scheduler
-    pub fn new() -> Self {
+    /// 构造空调度器，可用于静态初始化；此时不分配线程表内存。
+    pub const fn new() -> Self {
         Scheduler {
             current: None,
             threads: Vec::new(),
-            idle_context: ThreadContext::default(),
+            idle_sp: 0,
         }
     }
 
@@ -48,22 +48,25 @@ impl Scheduler {
         }
     }
 
-    pub fn block_thread(&mut self, current_id: usize, target_id: usize) {
+    /// 返回是否真正将当前线程置为阻塞，目标已退出时无需等待。
+    pub fn block_thread(&mut self, current_id: usize, target_id: usize) -> bool {
         // [TODO] 仅按 ID 查找无法识别已复用的槽位；句柄和 waiting_for 应保存并校验完整线程身份。
         // 只有当目标线程存在且没有结束时才阻塞
         if let Some(target) = self.find_thread(target_id) {
             if target.state == ThreadState::Terminated {
-                return;
+                return false;
             }
         } else {
-            return;
+            return false;
         }
         if let Some(current) = self.get_thread(current_id) {
             current.state = ThreadState::Blocked;
             current.waiting_for = Some(target_id);
             info!("Thread {} blocked, waiting for thread {}", current_id, target_id);
             info!("ThreadState {:?}", current.state);
+            return true;
         }
+        false
     }
 
     pub fn exit_thread(&mut self, thread_id: usize) {
@@ -77,7 +80,7 @@ impl Scheduler {
         thread.state = ThreadState::Terminated;
         info!("Thread {} exited", thread.id);
         info!("ThreadState {:?}", thread.state);
-        info!("ThreadContext {}", thread.context);
+        info!("Thread sp 0x{:x}", thread.sp);
         info!("Threads Count {}", self.threads.iter().filter(|t| t.is_some()).count());
 
         // 当前线程已退出，清空 current，避免后续调度访问到已被清理的槽位
@@ -97,16 +100,10 @@ impl Scheduler {
         }
     }
 
-    pub fn run_next(&mut self) {
-        unsafe extern "C" {
-            pub fn __switch(
-                current_thread_cx_ptr: *mut ThreadContext,
-                next_thread_cx_ptr: *const ThreadContext,
-            );
-        }
-
+    /// 更新调度状态并返回切换参数；实际换栈由调用方解锁后执行。
+    pub fn prepare_switch(&mut self) -> Option<(*mut usize, usize)> {
         let current_id = self.current;
-        // 注意：这是“顺序执行版”的跑法（还没接上下文切换），只用于先把基础结构跑通
+        // 选择下一线程，寄存器现场由 switch.S 保存在各自栈上。
         let next_id = match self.find_ready_thread_id() {
             Some(id) => id,
             None => {
@@ -118,24 +115,29 @@ impl Scheduler {
 
         let next_thread = self.get_thread(next_id).unwrap();
         next_thread.state = ThreadState::Running;
+
+        // 仍选中当前线程时继续执行即可；旧 sp 指向上次现场，不能再次恢复它。
+        if current_id == Some(next_id) {
+            return None;
+        }
         info!("");
         info!("Running thread {}", next_thread.id);
         info!("ThreadState {:?}", next_thread.state);
-        info!("ThreadContext {}", next_thread.context);
-        let next_thread_cx_ptr = &next_thread.context as *const ThreadContext;
+        info!("Thread sp 0x{:x}", next_thread.sp);
+        let next_sp = next_thread.sp;
         self.current = Some(next_id);
 
-        let current_thread_cx = match current_id {
-            Some(id) => &mut self.get_thread(id).unwrap().context,
+        let current_sp = match current_id {
+            Some(id) => &mut self.get_thread(id).unwrap().sp,
             None => {
-                // 如果没有当前线程，使用调度器内的占位上下文
-                &mut self.idle_context
+                // 没有当前线程时，只需暂存启动栈的 sp。
+                &mut self.idle_sp
             }
         };
 
-        unsafe {
-            __switch(current_thread_cx, next_thread_cx_ptr);
-        }
+        // 裸指针不延长对 guard 的借用，允许调用方先解锁再切换。
+        // [TODO] 调用方需以中断保护保证切换前地址有效、调度状态不被改变。
+        return Some((current_sp as *mut usize, next_sp));
     }
 
     /// 从当前线程的下一槽位开始查找，最后检查当前线程；

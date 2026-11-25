@@ -1,6 +1,7 @@
 extern crate alloc;
 use alloc::boxed::Box;
 use core::fmt::{Display, Formatter};
+use core::arch::asm;
 use core::mem;
 
 use super::{STACK_SIZE, thread_entry};
@@ -14,29 +15,12 @@ pub enum ThreadState {
     Terminated,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ThreadContext {
-    pub ra: usize,
-    pub sp: usize,
-    pub s: [usize; 12],
-}
-
-impl Display for ThreadContext {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "ThreadContext {{ ra: 0x{:x}, sp: 0x{:x}, s: [{:?}] }}",
-            self.ra, self.sp, self.s
-        )
-    }
-}
-
 pub struct TCB {
     // Fields for the TCB
     pub id: usize,
     pub state: ThreadState,
-    pub context: ThreadContext,
+    /// 指向栈上保存的切换现场，布局见 switch.S。
+    pub sp: usize,
     /// 线程要执行的任务（闭包）
     ///
     /// 说明：
@@ -56,21 +40,24 @@ impl TCB {
         let mut tcb = TCB {
             id,
             state: ThreadState::Uninit,
-            context: ThreadContext::default(),
+            sp: 0,
             job,
             waiting_for: None,
             stack: Box::new([0; STACK_SIZE]),
         };
-        // 初始化线程上下文：
-        // - ra 指向线程入口 trampoline（统一入口负责调用 job）
-        // - sp 指向“栈顶”（RISC-V 栈向低地址增长），并按 16 字节对齐
-        let sp_top = tcb.stack.as_ptr() as usize + STACK_SIZE * mem::size_of::<usize>();
+        // 新线程预先构造与 switch.S 相同的现场，让首次切换也走普通恢复流程。
+        let stack_base = tcb.stack.as_ptr() as usize;
+        let sp_top = stack_base + STACK_SIZE * mem::size_of::<usize>();
         let sp_top_aligned = sp_top & !0xF;
-        tcb.context = ThreadContext {
-            ra: thread_entry as *const () as usize,
-            sp: sp_top_aligned,
-            s: [0; 12],
-        };
+        // 共 16 个 usize（128 字节）：ra、s0..s11、mepc、mstatus、对齐填充。
+        let frame = (sp_top_aligned - stack_base) / mem::size_of::<usize>() - 16;
+        let status: usize;
+        // 当前运行于机器模式；继承状态位，但新线程的 MIE 必须开启。
+        unsafe { asm!("csrr {}, mstatus", out(reg) status) };
+        tcb.stack[frame] = thread_entry as *const () as usize;
+        tcb.stack[frame + 14] = status | (1 << 3);
+        // 其他槽位已由栈的零初始化填好；恢复后 sp 会回到对齐的栈顶。
+        tcb.sp = stack_base + frame * mem::size_of::<usize>();
         tcb
     }
 
@@ -87,8 +74,8 @@ impl Display for TCB {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "TCB {{ id: {}, state: {:?}, context: {:?}}}",
-            self.id, self.state, self.context
+            "TCB {{ id: {}, state: {:?}, sp: 0x{:x}}}",
+            self.id, self.state, self.sp
         )
     }
 }

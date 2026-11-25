@@ -1,49 +1,53 @@
-# RISC-V 64 位线程上下文切换：保存当前线程，恢复下一线程。
+# RV64 线程切换：TCB 只保存 sp，寄存器现场放在线程自己的栈上。
+# a0 = 当前线程 sp 字段的地址，a1 = 下一线程保存的 sp 值。
 #
-# 参数遵循 RISC-V 调用约定：
-#   a0 = 当前线程的 *mut ThreadContext（保存位置）
-#   a1 = 下一线程的 *const ThreadContext（恢复来源）
-# ThreadContext 使用 #[repr(C)]，且 RV64 的 usize 占 8 字节：
-#   偏移 0：ra；偏移 8：sp；偏移 16..104：s0..s11。
-# 修改 Rust 结构体字段顺序或类型时，必须同步修改这里的偏移。
-#
-# 这里按普通函数调用约定切换，只保存 ra、sp 和被调用者保存寄存器 s0..s11。
-# a0..a7、t0..t6 属于调用者保存寄存器，由调用方按需保存。
-# 本实现不保存浮点寄存器、向量寄存器或中断现场，不能直接用作抢占式切换。
+# 栈帧共 128 字节，保持 16 字节对齐（TCB::new 必须使用相同布局）：
+#   0: ra；8..96: s0..s11；104: mepc；112: mstatus；120: 对齐填充。
+# switch 是普通函数调用，调用者保存寄存器由 Rust 调用方按 ABI 处理；
+# 从中断调用时，被打断的 ra、a0..a7、t0..t6 已由 trap.S 保存在更上层栈中。
+# 当前不支持浮点、向量现场，也不保存定时器等系统共享寄存器。
 
 .altmacro
-# 将 sn 保存到当前线程上下文的 s[n]，前两个槽位留给 ra 和 sp。
 .macro SAVE_SN n
-    sd s\n, (\n+2)*8(a0)
+    sd s\n, (\n+1)*8(sp)
 .endm
-# 从下一线程上下文的 s[n] 恢复 sn。
 .macro LOAD_SN n
-    ld s\n, (\n+2)*8(a1)
+    ld s\n, (\n+1)*8(sp)
 .endm
 
+    .section .text
     .globl __switch
     .type __switch, @function
 __switch:
-    # 1. 保存当前线程的栈指针和返回地址。
-    #    ra 是当前线程调用 __switch 后继续执行的位置。
-    sd sp, 8(a0)
-    sd ra, 0(a0)
-    # 2. 展开为 12 条 sd 指令，保存 s0..s11；这不是运行时循环。
+    # 读取本次切换前的 mstatus，同时关中断，保护换栈过程。
+    # t0、t1 属于调用者保存的临时寄存器，可以用于搬运 CSR。
+    csrrci t0, mstatus, 8
+    addi sp, sp, -128
+    sd ra, 0(sp)
     .set n, 0
     .rept 12
         SAVE_SN %n
         .set n, n + 1
     .endr
-    # 3. 恢复下一线程的返回地址和 s0..s11。
-    ld ra, 0(a1)
+    csrr t1, mepc
+    sd t1, 104(sp)
+    sd t0, 112(sp)
+
+    # 存下当前现场的位置，然后直接换到下一线程的现场。
+    sd sp, 0(a0)
+    mv sp, a1
+
+    ld ra, 0(sp)
     .set n, 0
     .rept 12
         LOAD_SN %n
         .set n, n + 1
     .endr
-    # 4. 切换到下一线程的栈；此后不能再依赖当前线程的栈内容。
-    ld sp, 8(a1)
-    # 5. ret 跳转到刚恢复的 ra，而不是返回刚才调用本函数的线程。
-    #    已运行的线程：从上次调用 __switch 的返回位置继续。
-    #    新线程：TCB::new 将 ra 初始化为 thread_entry，从统一入口开始。
+    ld t1, 104(sp)
+    csrw mepc, t1
+    ld t0, 112(sp)
+    addi sp, sp, 128
+    # 栈和普通寄存器全部恢复后，再恢复目标线程自己的中断开关状态。
+    # 中断中的线程保持关中断，最终由其 mret 恢复；新线程初始 MIE 为 1。
+    csrw mstatus, t0
     ret
