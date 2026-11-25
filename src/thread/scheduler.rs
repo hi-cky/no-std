@@ -43,8 +43,6 @@ impl Scheduler {
     pub fn yield_thread(&mut self, thread_id: usize) {
         if let Some(thread) = self.get_thread(thread_id) {
             thread.state = ThreadState::Ready;
-            info!("Thread {} switched", thread_id);
-            info!("ThreadState {:?}", thread.state);
         }
     }
 
@@ -120,6 +118,7 @@ impl Scheduler {
         if current_id == Some(next_id) {
             return None;
         }
+        info!("Thread {:?} switched", current_id);
         info!("");
         info!("Running thread {}", next_thread.id);
         info!("ThreadState {:?}", next_thread.state);
@@ -136,7 +135,7 @@ impl Scheduler {
         };
 
         // 裸指针不延长对 guard 的借用，允许调用方先解锁再切换。
-        // [TODO] 调用方需以中断保护保证切换前地址有效、调度状态不被改变。
+        // 调用方保持中断关闭，保证解锁后到切换前地址有效、调度状态不被改变。
         return Some((current_sp as *mut usize, next_sp));
     }
 

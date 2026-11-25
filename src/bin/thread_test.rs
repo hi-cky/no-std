@@ -24,7 +24,7 @@ pub fn main() -> ! {
     // system::print_memory_layout();
     heap::init_heap();
 
-    thread::init(main_thread);
+    thread::init(main_thread, Some(10));
 
     system::shutdown()
 }
@@ -57,8 +57,8 @@ fn main_thread() {
 fn task(thread_name: &str, times: usize) {
     for i in 1..=times {
         println!("我是 {}, result: {}, time: {}", thread_name, fib(i), timer::get_time());
-        sleep(100 * i);
-        // delay(50);
+        // sleep(100 * i);
+        delay(40);
     }
 }
 

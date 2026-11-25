@@ -1,12 +1,14 @@
 //! 🌱 堆内存分配器模块
 //!
 //! 提供基于 buddy_system_allocator 的堆内存管理功能
+mod interrupt_heap;
 
+use interrupt_heap::InterruptHeap;
 use buddy_system_allocator::LockedHeap;
 
 /// 全局堆分配器
 #[global_allocator]
-static HEAP_ALLOCATOR: LockedHeap = LockedHeap::empty();
+static HEAP_ALLOCATOR: InterruptHeap = InterruptHeap {inner: LockedHeap::empty()};
 
 /// 堆内存大小：1MB
 static HEAP_SIZE: usize = 1024 * 1024;
@@ -20,6 +22,7 @@ static mut HEAP_SPACE: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 pub fn init_heap() {
     unsafe {
         HEAP_ALLOCATOR
+            .inner
             .lock()
             .init(core::ptr::addr_of!(HEAP_SPACE) as usize, HEAP_SIZE);
     }

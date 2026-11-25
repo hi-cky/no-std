@@ -2,6 +2,8 @@
 //!
 //! 提供 RISC-V 机器模式 trap 入口与基本分发逻辑。
 //! 定时中断交给 timer 处理，其他异常或中断记录后停机。
+mod interrupt_guard;
+pub use interrupt_guard::InterruptGuard;
 
 use core::arch::{asm, global_asm};
 use log::error;

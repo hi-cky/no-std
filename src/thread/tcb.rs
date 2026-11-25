@@ -60,13 +60,6 @@ impl TCB {
         tcb.sp = stack_base + frame * mem::size_of::<usize>();
         tcb
     }
-
-    // Methods for the TCB
-    pub fn run(&mut self) {
-        if let Some(job) = self.job.take() {
-            job();
-        }
-    }
 }
 
 // 实现一下display
